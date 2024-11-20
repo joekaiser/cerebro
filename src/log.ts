@@ -1,10 +1,10 @@
 import { config } from "@/config.ts";
 import * as log from "@std/log";
-const LOG_LEVEL = config.DB_LOG_LEVEL() as never;
+const LOG_LEVEL = config.CB_LOG_LEVEL() as never;
 
 log.setup({
   handlers: {
-    console: new log.ConsoleHandler("DEBUG", {
+    console: new log.ConsoleHandler(LOG_LEVEL, {
       // formatter: log.formatters.jsonFormatter,
       formatter: (logRecord) => {
         let msg =

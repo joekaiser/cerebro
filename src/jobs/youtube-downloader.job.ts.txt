@@ -1,0 +1,175 @@
+import { config } from "@/config.ts";
+import { chromaCollections } from "@/db/chroma-collections.ts";
+import { chromaClient } from "@/embedder/chroma-client.ts";
+import { chunkAndEmbed } from "@/embedder/chunk-embedder.ts";
+import { Job } from "@/jobs/job.ts";
+import log from "@/log.ts";
+import { ensureDir } from "@std/fs";
+
+export class YoutubeDownloaderJob implements Job {
+    workingDir = config.CB_DATA_DIR() + "/yt";
+    audioDir = this.workingDir + "/audio";
+    ingestDir = this.workingDir + "/ingest";
+    processedDir = config.CB_DATA_DIR() + "/processed";
+
+    public get schedule() {
+        //every 10 seconds
+        return "0 1 * * *";
+    }
+    public async run() {
+        log.info("Starting Youtube History Job");
+        await this.ensureDirectories();
+        await this.downloadPlaylist();
+        await this.runWhisper();
+        await this.embedTranscripts();
+        log.info("Completed Youtube History Job");
+    }
+
+    async ensureDirectories() {
+        await ensureDir(this.workingDir);
+        await ensureDir(this.audioDir);
+        await ensureDir(this.ingestDir);
+        await ensureDir(this.processedDir);
+    }
+
+    async setFileAsProcessed(file: Deno.DirEntry) {
+        await Deno.rename(
+            this.ingestDir + "/" + file.name,
+            this.processedDir + "/" + file.name,
+        );
+    }
+
+    async downloadPlaylist() {
+        log.debug("Downloading playlist");
+        const command = new Deno.Command("yt-dlp", {
+            args: [
+                `https://www.youtube.com/playlist?list=${config.CB_YT_WATCH_PLAYLIST()}`,
+                "-o",
+                `${this.audioDir}/%(title)s__-chan-%(channel)s__-id-%(id)s.%(ext)s`,
+                "--download-archive",
+                `${this.workingDir}/playlist-archive.txt`,
+                "--no-overwrites",
+                "--extract-audio",
+                "--audio-format",
+                "mp3",
+                "--audio-quality",
+                "0",
+            ],
+            stdout: "piped",
+            stderr: "piped",
+        });
+        const process = command.spawn();
+        const decoder = new TextDecoder();
+
+        for await (const chunk of process.stdout) {
+            log.info(decoder.decode(chunk));
+        }
+        for await (const chunk of process.stderr) {
+            log.error(decoder.decode(chunk));
+        }
+
+        await process.status;
+    }
+
+    async runWhisper() {
+        log.info("Generasting Whisper transcripts");
+        for await (const file of Deno.readDir(this.audioDir)) {
+            if (file.isFile) {
+                log.debug("Transcribing file: ", file.name);
+                const command = new Deno.Command("whisper-ctranslate2", {
+                    args: [
+                        "--language",
+                        "English",
+                        "--model",
+                        "large-v3-turbo", // "small.en",
+                        "--output_format",
+                        "txt",
+                        "--output_dir",
+                        this.ingestDir,
+                        `${this.audioDir}/${file.name}`,
+                    ],
+                    stdout: "piped",
+                    stderr: "piped",
+                });
+                const process = command.spawn();
+                const decoder = new TextDecoder();
+
+                for await (const chunk of process.stdout) {
+                    log.info(decoder.decode(chunk));
+                }
+                for await (const chunk of process.stderr) {
+                    log.error(decoder.decode(chunk));
+                }
+
+                await process.status;
+
+                //if ingest/file exists then delete the audio file
+                try {
+                    // this fails because file.name contains the .mp3 extension.
+                    // replace the extension with .txt
+                    const subtitleFile = file.name.replace(".mp3", ".txt");
+                    Deno.lstat(this.ingestDir + "/" + subtitleFile);
+                    log.info("Deleting file: ", file.name);
+                    await Deno.remove(this.audioDir + "/" + file.name);
+                } catch {
+                    log.warn(
+                        `File ${file.name} does not exist. Was the transcript generated?`,
+                    );
+                    // File doesn't exist, do nothing
+                }
+            }
+        }
+    }
+    async embedTranscripts() {
+        log.info("Embedding transcripts");
+
+        for await (const file of Deno.readDir(this.ingestDir)) {
+            if (file.isFile) {
+                log.debug("Embedding file: ", file.name);
+                const fileContent = await Deno.readTextFile(
+                    this.ingestDir + "/" + file.name,
+                );
+                const metadata = this.extractMetadataFromFileName(file.name);
+
+                const data = await chunkAndEmbed(fileContent);
+                const collection = await chromaClient.getOrCreateCollection(
+                    { name: chromaCollections.youtube },
+                );
+
+                try {
+                    console.log(metadata);
+                    await collection.add({
+                        ids: data.embeddings.map((_, i) =>
+                            `${metadata.id}__${i}`
+                        ),
+                        embeddings: data.embeddings,
+                        documents: data.chunks,
+                        metadatas: data.embeddings.map((_, i) => ({
+                            title: metadata.title,
+                            channel: metadata.channel,
+                            url: metadata.url,
+                            id: metadata.id,
+                            chunk: i,
+                        })),
+                    });
+
+                    this.setFileAsProcessed(file);
+                } catch (e) {
+                    log.error("failed to embed file: ", file.name, e);
+                }
+            }
+        }
+    }
+
+    extractMetadataFromFileName(fileName: string) {
+        fileName = fileName.replace(".txt", "");
+        const regex = /^(.*?)__-chan-(.*?)__-id-(.*?)(?:\.(.*?))?$/;
+        const match = fileName.match(regex);
+        return {
+            title: match?.[1] ?? "",
+            channel: match?.[2] ?? "",
+            id: match?.[3] ?? fileName,
+            url: "https://youtu.be/" + match?.[3],
+        };
+    }
+}
