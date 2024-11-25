@@ -1,5 +1,5 @@
+import { embed } from "@/ollama/ollama.ts";
 import { decode, encode } from "npm:gpt-tokenizer";
-import { Ollama } from "npm:ollama";
 import tokenizer from "npm:sbd";
 
 type chunkOptions = {
@@ -52,23 +52,15 @@ export function getChunks(
   return chunks;
 }
 
-export async function getEmbedding(text: string) {
-  const ollama = new Ollama();
-
-  const embedding = await ollama.embed({
-    model: "jina/jina-embeddings-v2-small-en",
-    input: `${text}`,
-  });
-  return embedding.embeddings[0];
-}
-
 export async function chunkAndEmbed(text: string, chunkOptions: chunkOptions = {
   maxChunkSize: 100,
   overlap: 5,
 }) {
-  const chunks = getChunks(text, chunkOptions);
+  const chunks = getChunks(text, chunkOptions).map((chunk) =>
+    chunk.replace(/\n/g, "")
+  );
   const embeddings = await Promise.all(
-    chunks.map((chunk) => getEmbedding(chunk)),
+    chunks.map((chunk) => embed(chunk)),
   );
   return { embeddings, chunks };
 }

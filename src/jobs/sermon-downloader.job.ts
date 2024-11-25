@@ -1,3 +1,4 @@
+import { getBookOfTheBible } from "@/bibleParser.ts";
 import { config } from "@/config.ts";
 import Sermon from "@/db/models/Sermon.ts";
 import { chromaClient } from "@/embedder/chroma-client.ts";
@@ -5,6 +6,12 @@ import { chromaCollections } from "@/embedder/chroma-collections.ts";
 import { chunkAndEmbed } from "@/embedder/chunk-embedder.ts";
 import { Job } from "@/jobs/job.ts";
 import log from "@/log.ts";
+import * as ollamaUtil from "@/ollama/ollama.ts";
+import {
+  sermonNotesPrompt,
+  sermonQuestionsPrompt,
+  sermonThemePrompt,
+} from "@/ollama/prompts.ts";
 import { ensureDir } from "@std/fs";
 import Parser from "rss-parser";
 
@@ -12,11 +19,8 @@ export class SermonDownloaderJob implements Job {
   workingDir = config.CB_DATA_DIR() + "/sermons";
   audioDir = this.workingDir + "/audio";
   ingestDir = this.workingDir + "/ingest";
-  processedDir = config.CB_DATA_DIR() + "/processed";
 
   RSS_FEED_URL = "https://podcasts.subsplash.com/3a01115/podcast.rss";
-
-  alreadyProcessedCounter = 0;
 
   public get schedule() {
     // return "0 */2 * * *";
@@ -35,14 +39,6 @@ export class SermonDownloaderJob implements Job {
     await ensureDir(this.workingDir);
     await ensureDir(this.audioDir);
     await ensureDir(this.ingestDir);
-    await ensureDir(this.processedDir);
-  }
-
-  async setFileAsProcessed(file: Deno.DirEntry) {
-    await Deno.rename(
-      this.ingestDir + "/" + file.name,
-      this.processedDir + "/" + file.name,
-    );
   }
 
   async getSermonData(videoId: string) {
@@ -51,15 +47,17 @@ export class SermonDownloaderJob implements Job {
 
   async downloadSermons() {
     log.debug("Downloading RSS");
-    this.alreadyProcessedCounter = 0;
+    let alreadyProcessedCounter = 0;
     const parser = new Parser();
     const feed = await parser.parseURL(this.RSS_FEED_URL);
 
     for (const item of feed.items) {
-      if (this.alreadyProcessedCounter >= 3) {
-        log.info("Already processed the last 3 sermons, stopping...");
-        break;
-      }
+      // if (alreadyProcessedCounter > 4) {
+      //   log.info(
+      //     `Already processed the last ${alreadyProcessedCounter} sermons, stopping...`,
+      //   );
+      //   break;
+      // }
       // this is just making TS happy
       if (
         !item.enclosure?.url ||
@@ -68,11 +66,13 @@ export class SermonDownloaderJob implements Job {
         continue;
       }
       if (await this.getSermonData(item.guid)) {
-        this.alreadyProcessedCounter++;
+        log.debug("Already processed:", item.title);
+        alreadyProcessedCounter++;
         continue;
       }
+      alreadyProcessedCounter = 0;
 
-      const sermon = new Sermon({
+      let sermon = new Sermon({
         title: item.title ?? "Unknown Title",
         publishedAt: item.pubDate ? new Date(item.pubDate) : new Date(),
         audioUrl: item.enclosure?.url,
@@ -82,7 +82,7 @@ export class SermonDownloaderJob implements Job {
         subtitle: item.itunes?.subtitle,
       });
 
-      log.debug("Processing sermon: ", sermon.title);
+      log.info("Processing sermon:", sermon.title);
       const audioPath = await this.downloadAudioFile(
         sermon.audioUrl,
         sermon.videoId,
@@ -94,15 +94,24 @@ export class SermonDownloaderJob implements Job {
       );
       sermon.transcription = transcription;
       sermon.transcribedAt = new Date();
-      await sermon.save();
+      sermon = await sermon.save(); //need the sermonId to tie to the embeddings
       await this.embedTranscript(transcription, sermon.id, sermon.title);
       sermon.embeddedAt = new Date();
-      sermon.save();
+      sermon = await sermon.save();
+      sermon.summary = await this.getSummmary(transcription);
+      sermon.questions = await this.getQuestions(transcription);
+      sermon.theme = await this.getTheme(sermon.summary);
+      sermon.book = getBookOfTheBible(`${sermon.subtitle}`);
+      if (sermon.book == undefined) {
+        sermon.book = getBookOfTheBible(`${sermon.title}`);
+      }
+      sermon = await sermon.save();
+      //todo: archive transcript?
     }
   }
 
   async downloadAudioFile(url: string, fileName: string) {
-    log.debug("Downloading audio file: ", url);
+    log.debug("Downloading audio file:", url);
     const response = await fetch(url);
     const audioData = await response.arrayBuffer();
     const audioPath = `${this.audioDir}/${fileName}.mp3`;
@@ -111,13 +120,13 @@ export class SermonDownloaderJob implements Job {
   }
 
   async runWhisper(audioPath: string) {
-    log.debug("Transcribing audio: ", audioPath);
+    log.debug("Transcribing audio:", audioPath);
     const command = new Deno.Command("whisper-ctranslate2", {
       args: [
         "--language",
         "English",
         "--model",
-        "small.en", //"large-v3-turbo",
+        "large-v3-turbo", //"small.en", //"large-v3-turbo",
         "--output_format",
         "txt",
         "--output_dir",
@@ -129,24 +138,22 @@ export class SermonDownloaderJob implements Job {
     });
     const process = command.spawn();
     const decoder = new TextDecoder();
+    const result = await process.output();
 
-    for await (const chunk of process.stdout) {
-      log.debug(decoder.decode(chunk));
+    if (result.code !== 0) {
+      log.error("Whisper failed with code:", result.code);
+      log.error(decoder.decode(result.stderr));
+      throw new Error("Whisper failed");
     }
-    for await (const chunk of process.stderr) {
-      log.error(decoder.decode(chunk));
-    }
-
-    await process.status;
   }
 
   async removeAudioIfTranscriptExists(audioPath: string) {
-    log.debug("Checking if transcript exists: ", audioPath);
     const fileName = audioPath.split("/").pop() || "";
+    log.debug("Checking if transcript exists for ", fileName);
     const subtitleFile = fileName.replace(".mp3", ".txt");
     try {
       Deno.lstat(this.ingestDir + "/" + subtitleFile);
-      log.debug("Deleting file: ", fileName);
+      log.debug("Deleting file:", fileName);
       await Deno.remove(audioPath);
     } catch {
       log.warn(
@@ -164,7 +171,7 @@ export class SermonDownloaderJob implements Job {
   }
 
   async embedTranscript(transcript: string, mongoid: string, title: string) {
-    log.debug("Embedding file: ", title);
+    log.debug("Embedding file:", title);
 
     const data = await chunkAndEmbed(transcript);
     const collection = await chromaClient.getOrCreateCollection(
@@ -183,7 +190,51 @@ export class SermonDownloaderJob implements Job {
         })),
       });
     } catch (e) {
-      log.error("failed to embed file: ", title, e);
+      log.error("failed to embed file:", title, e);
     }
+  }
+  async getSummmary(transcript: string) {
+    log.debug("Getting summary");
+    const summary = await ollamaUtil.instruct(
+      transcript,
+      ollamaUtil.Models.LLAMA3_1,
+      sermonNotesPrompt,
+      {
+        num_ctx: 32000,
+        frequency_penalty: 0.15,
+        presence_penalty: 0.05,
+        temperature: 0.35,
+        top_p: 0.8,
+      },
+    );
+    return summary.response;
+  }
+
+  async getQuestions(transcript: string) {
+    log.debug("Getting questions");
+    const questions = await ollamaUtil.instruct(
+      transcript,
+      ollamaUtil.Models.LLAMA3_1,
+      sermonQuestionsPrompt,
+      {
+        num_ctx: 32000,
+        frequency_penalty: 0.3,
+        presence_penalty: 0.2,
+        temperature: 0.55,
+        top_p: 0.9,
+      },
+    );
+    return questions.response;
+  }
+
+  async getTheme(summary: string) {
+    log.debug("Getting theme");
+    const themes = await ollamaUtil.instruct(
+      summary,
+      ollamaUtil.Models.LLAMA3_2,
+      sermonThemePrompt,
+      { temperature: 0 },
+    );
+    return themes.response;
   }
 }

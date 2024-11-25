@@ -11,6 +11,7 @@ const CONFIG = {
   CB_DATABASE_URL: [String],
   CB_DATA_DIR: [String],
   CB_RUN_JOBS: [Boolean, true],
+  CB_OLLAMA_HOST: [String, "http://localhost:11434"],
 } as const;
 
 type Config = typeof CONFIG;
