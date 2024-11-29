@@ -6,7 +6,7 @@ import { Document, Model, model, Schema, Types } from "mongoose";
 const sermonSchema = new Schema({
   title: { type: String, required: true },
   subtitle: String,
-  publishedAt: { type: Date, required: true },
+  publishedAt: { type: Date, required: true, index: true },
   audioUrl: { type: String, required: true },
   image: String,
   videoId: { type: String, unique: true, required: true },
@@ -14,7 +14,7 @@ const sermonSchema = new Schema({
   transcribedAt: Date,
   summary: String,
   speaker: String,
-  embeddedAt: Date,
+  embeddedAt: { type: Date, index: true, sparse: true },
   questions: String,
   theme: String,
   book: String,

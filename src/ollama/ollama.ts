@@ -8,8 +8,13 @@ export enum Models {
   EMBEDDING = "jina/jina-embeddings-v2-small-en",
 }
 
+let ollamaClient: Ollama;
+
 function getOllama() {
-  return new Ollama({ host: config.CB_OLLAMA_HOST() });
+  if (!ollamaClient) {
+    ollamaClient = new Ollama({ host: config.CB_OLLAMA_HOST() });
+  }
+  return ollamaClient;
 }
 export async function instruct(
   prompt: string,
@@ -25,12 +30,12 @@ export async function instruct(
   });
   return result;
 }
-export async function embed(text: string) {
+export async function embed(text: string[]) {
   const embedding = await getOllama().embed({
     model: Models.EMBEDDING,
-    input: `${text}`,
+    input: text,
   });
-  return embedding.embeddings[0];
+  return embedding.embeddings;
 }
 
 export type PromptOptions = Pick<

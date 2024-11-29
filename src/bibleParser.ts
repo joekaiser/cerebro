@@ -81,5 +81,3 @@ export function getBookOfTheBible(text: string) {
     }
   }
 }
-
-getBookOfTheBible("Psalm 96");

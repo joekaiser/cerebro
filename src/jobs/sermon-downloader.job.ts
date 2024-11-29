@@ -30,8 +30,6 @@ export class SermonDownloaderJob implements Job {
     log.info("Starting Sermon History Job");
     await this.ensureDirectories();
     await this.downloadSermons();
-    // await this.runWhisper();
-    // await this.embedTranscripts();
     log.info("Completed Sermon History Job");
   }
 
@@ -41,8 +39,8 @@ export class SermonDownloaderJob implements Job {
     await ensureDir(this.ingestDir);
   }
 
-  async getSermonData(videoId: string) {
-    return await Sermon.findOne({ videoId });
+  async getSermonData(publishedAt: Date) {
+    return await Sermon.findOne({ publishedAt });
   }
 
   async downloadSermons() {
@@ -52,12 +50,12 @@ export class SermonDownloaderJob implements Job {
     const feed = await parser.parseURL(this.RSS_FEED_URL);
 
     for (const item of feed.items) {
-      // if (alreadyProcessedCounter > 4) {
-      //   log.info(
-      //     `Already processed the last ${alreadyProcessedCounter} sermons, stopping...`,
-      //   );
-      //   break;
-      // }
+      if (alreadyProcessedCounter > 4) {
+        log.info(
+          `Already processed the last ${alreadyProcessedCounter} sermons, stopping...`,
+        );
+        break;
+      }
       // this is just making TS happy
       if (
         !item.enclosure?.url ||
@@ -65,7 +63,7 @@ export class SermonDownloaderJob implements Job {
       ) {
         continue;
       }
-      if (await this.getSermonData(item.guid)) {
+      if (await this.getSermonData(new Date(item.pubDate ?? new Date()))) {
         log.debug("Already processed:", item.title);
         alreadyProcessedCounter++;
         continue;
@@ -76,7 +74,7 @@ export class SermonDownloaderJob implements Job {
         title: item.title ?? "Unknown Title",
         publishedAt: item.pubDate ? new Date(item.pubDate) : new Date(),
         audioUrl: item.enclosure?.url,
-        videoId: item.guid,
+        videoId: item.guid, //warning this changes every 12 hours or so 🤦. Keeping here for posterity but don't rely on it
         image: item.itunes?.image,
         speaker: item.itunes?.author,
         subtitle: item.itunes?.subtitle,
@@ -87,6 +85,7 @@ export class SermonDownloaderJob implements Job {
         sermon.audioUrl,
         sermon.videoId,
       );
+
       await this.runWhisper(audioPath);
       await this.removeAudioIfTranscriptExists(audioPath);
       const transcription = await this.readTranscript(
@@ -95,12 +94,18 @@ export class SermonDownloaderJob implements Job {
       sermon.transcription = transcription;
       sermon.transcribedAt = new Date();
       sermon = await sermon.save(); //need the sermonId to tie to the embeddings
-      await this.embedTranscript(transcription, sermon.id, sermon.title);
-      sermon.embeddedAt = new Date();
-      sermon = await sermon.save();
+
+      // await this.embedTranscript(transcription, sermon.id, sermon.title);
+      // sermon.embeddedAt = new Date();
+      // sermon = await sermon.save();
+
       sermon.summary = await this.getSummmary(transcription);
+      sermon = await sermon.save();
+
       sermon.questions = await this.getQuestions(transcription);
-      sermon.theme = await this.getTheme(sermon.summary);
+      sermon = await sermon.save();
+
+      sermon.theme = await this.getTheme(sermon.summary ?? "NO THEME");
       sermon.book = getBookOfTheBible(`${sermon.subtitle}`);
       if (sermon.book == undefined) {
         sermon.book = getBookOfTheBible(`${sermon.title}`);
@@ -126,7 +131,7 @@ export class SermonDownloaderJob implements Job {
         "--language",
         "English",
         "--model",
-        "large-v3-turbo", //"small.en", //"large-v3-turbo",
+        "small.en", //"large-v3-turbo",
         "--output_format",
         "txt",
         "--output_dir",
@@ -170,29 +175,29 @@ export class SermonDownloaderJob implements Job {
     return fileContent;
   }
 
-  async embedTranscript(transcript: string, mongoid: string, title: string) {
-    log.debug("Embedding file:", title);
+  // async embedTranscript(transcript: string, mongoid: string, title: string) {
+  //   log.debug("Embedding file:", title);
 
-    const data = await chunkAndEmbed(transcript);
-    const collection = await chromaClient.getOrCreateCollection(
-      { name: chromaCollections.sermon },
-    );
+  //   const data = await chunkAndEmbed(transcript);
+  //   const collection = await chromaClient.getOrCreateCollection(
+  //     { name: chromaCollections.sermon },
+  //   );
 
-    try {
-      await collection.add({
-        ids: data.embeddings.map((_, i) => `${mongoid}__${i}`),
-        embeddings: data.embeddings,
-        documents: data.chunks,
-        metadatas: data.embeddings.map((_, i) => ({
-          title: title,
-          id: mongoid,
-          chunk: i,
-        })),
-      });
-    } catch (e) {
-      log.error("failed to embed file:", title, e);
-    }
-  }
+  //   try {
+  //     await collection.add({
+  //       ids: data.embeddings.map((_, i) => `${mongoid}__${i}`),
+  //       embeddings: data.embeddings,
+  //       documents: data.chunks,
+  //       metadatas: data.embeddings.map((_, i) => ({
+  //         title: title,
+  //         id: mongoid,
+  //         chunk: i,
+  //       })),
+  //     });
+  //   } catch (e) {
+  //     log.error("failed to embed file:", title, e);
+  //   }
+  // }
   async getSummmary(transcript: string) {
     log.debug("Getting summary");
     const summary = await ollamaUtil.instruct(

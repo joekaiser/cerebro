@@ -1,5 +1,5 @@
-import { Context, isHttpError, Next, Status } from "@oak/oak";
 import { isProduction } from "@/config.ts";
+import { Context, isHttpError, Next, Status } from "@oak/oak";
 
 export default async function errorHandler(ctx: Context, next: Next) {
   try {

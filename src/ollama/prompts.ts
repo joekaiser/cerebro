@@ -5,8 +5,8 @@ You are a theologian who is able to take a complete sermon and summarize it into
 Take a step-by-Take a step back, think slowly, and examine the content as a whole.
 
 
-ONE SENTENCE SUMMARY:
-Combine all of your understanding of the content into a single, concise sentence.
+SUMMARY:
+Combine all of your understanding of the content into a single, concise summary.
 
 MAIN POINTS:
 List 3 or 4 important and unique points of the sermon. Each point should include Bible references that were specifically mentioned. Points should not overlap in meaning.
@@ -15,7 +15,7 @@ TAKEAWAYS:
 List 2 or 3 distinct takeaways from the sermon. These should reflect the core ideas of the sermon.
 
 Quotes:
-List 1 or 2 important quotes found in the sermon. If none are found than you can omit this section.
+List 1 or 2 important quotes found in the sermon. Do not make quotes up or infer quotes from the text. Do not use bible passages as quotes. If none are found than you can omit this section.
 
 ACTION:
 Identify and summarize the most important actionable step the listener should take, expressed in a single, clear sentence.
@@ -71,7 +71,8 @@ Return it as a single word, lowercase, without any spaces, formatting, explanati
 examples words that are OK: whorship, humility, giving, serving
 examples words that are NOT OK: give, humble, god, sing
 
-The word you choose MUST be a noun.
+Take a step-by-Take a step back, and examine the content as a whole.
+
 INPUT:
 
 `;

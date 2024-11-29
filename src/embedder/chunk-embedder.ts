@@ -1,3 +1,4 @@
+import log from "@/log.ts";
 import { embed } from "@/ollama/ollama.ts";
 import { decode, encode } from "npm:gpt-tokenizer";
 import tokenizer from "npm:sbd";
@@ -15,6 +16,7 @@ export function getChunks(
   const documentSize = tokens.length;
   const K = Math.ceil(documentSize / chunkOptions.maxChunkSize);
   const averageChunkSize = Math.ceil(documentSize / K);
+  log.debug("Average chunk size:", averageChunkSize);
 
   const chunks: string[] = [];
   const sentences = tokenizer.sentences(fileContent);
@@ -34,9 +36,11 @@ export function getChunks(
       if (currentChunk.length > 0) {
         chunks.push(currentChunk);
         lastChunkTokens = encode(currentChunk);
-        overlapText = decode(
-          lastChunkTokens.slice(-chunkOptions.overlap),
-        );
+        if (chunkOptions.overlap > 0) {
+          overlapText = decode(
+            lastChunkTokens.slice(-chunkOptions.overlap),
+          );
+        }
       }
       // Start next chunk with overlap from previous chunk
       currentChunk = overlapText + nextSentence;
@@ -48,19 +52,28 @@ export function getChunks(
   if (currentChunk) {
     chunks.push(currentChunk);
   }
-
+  log.debug("Chunk count:", chunks.length);
   return chunks;
 }
-
 export async function chunkAndEmbed(text: string, chunkOptions: chunkOptions = {
-  maxChunkSize: 100,
-  overlap: 5,
+  maxChunkSize: 90,
+  overlap: 0,
 }) {
   const chunks = getChunks(text, chunkOptions).map((chunk) =>
     chunk.replace(/\n/g, "")
   );
-  const embeddings = await Promise.all(
-    chunks.map((chunk) => embed(chunk)),
-  );
+  const embeddings = [];
+  const batchSize = 120;
+  for (let i = 0; i < chunks.length; i += batchSize) {
+    const batch = chunks.slice(i, i + batchSize);
+
+    // const batchEmbeddings = await Promise.all(
+    //   batch.map((chunk) => embed(chunk)),
+    // );
+
+    const batchEmbeddings = await embed(batch);
+
+    embeddings.push(...batchEmbeddings);
+  }
   return { embeddings, chunks };
 }
