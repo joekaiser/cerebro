@@ -2,7 +2,8 @@
   "tasks": {
     "start": "deno run -A src/main.ts",
     "dev": "deno serve -A --watch src/main.ts",
-    "debug": "deno run --unstable --inspect-wait -A src/main.ts"
+    "debug": "deno run --unstable --inspect-wait -A src/main.ts",
+    "deploy": "sudo service cerebro stop && deno compile -A -o cerebro src/main.ts && sudo chcon -t bin_t ./cerebro && sudo mv cerebro /opt/cerebro && sudo service cerebro start"
   },
   "imports": {
     "@/": "./src/",

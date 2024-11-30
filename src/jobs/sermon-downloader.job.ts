@@ -23,8 +23,8 @@ export class SermonDownloaderJob implements Job {
   RSS_FEED_URL = "https://podcasts.subsplash.com/3a01115/podcast.rss";
 
   public get schedule() {
-    // return "0 */2 * * *";
-    return "* * * * *";
+    return "0 */2 * * *";
+    //return "* * * * *";
   }
   public async run() {
     log.info("Starting Sermon History Job");

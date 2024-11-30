@@ -31,12 +31,13 @@ router.post("/embedder/embedall/sermons", async (ctx) => {
     { $unset: { embeddedAt: "" } },
   );
 
-  runJob(new SermonEmbedderJob().constructor.name);
+  //runJob(new SermonEmbedderJob().constructor.name);
   if (!removedCollection) {
     message = "Collection was not found, so it was not deleted";
   }
   ctx.response.body = {
-    message: message + " -- Queued up job to re-embed sermons",
+    message: message +
+      " -- Queued up job to re-embed sermons. Will run on next sechedule",
   };
 });
 
